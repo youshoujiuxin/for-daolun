@@ -1,0 +1,259 @@
+Ardunio  代码：
+
+
+
+//红外
+#include <IRremote.h>
+
+//wifi模块
+#include "ESP8266.h"
+#include "SoftwareSerial.h"
+
+#define SSID "Sakura" //填写2.4GHz的WIFI名称，不要使用校园网
+#define PASSWORD "13301217259" //填写自己的WIFI密码
+#define HOST_NAME "api.heclouds.com" //API主机名称，连接到OneNET平台，无需修改
+#define DEVICE_ID "643775804" //填写自己的OneNet设备ID
+#define HOST_PORT (80) //API端口，连接到OneNET平台，无需修改
+String APIKey = "1ZDRBszl=SKCeKT=niAOXiesU5k="; //与设备绑定的APIKey
+
+#define INTERVAL_SENSOR 1000 //定义传感器采样及发送时间间隔
+
+SoftwareSerial mySerial(9, 8); //定义ESP8266所连接的软串口
+ESP8266 wifi(mySerial);
+
+/* //oled屏                我们的想法是有一个led屏在硬件端显示球场状态  但Ardunio的内存太小，后来代码变大后会                                     严重 影响运行速度以及按键 数据的读取，于是就把led屏部分的代码暂时注释掉了
+#include <U8glib.h>
+U8GLIB_SSD1306_128X64 u8g(U8G_I2C_OPT_NONE); //设置OLED型号
+//-------字体设置，大、中、小
+#define setFont_L u8g.setFont(u8g_font_7x13)
+#define setFont_M u8g.setFont(u8g_font_fixed_v0r)
+#define setFont_S u8g.setFont(u8g_font_fixed_v0r)
+#define setFont_SS u8g.setFont(u8g_font_fub25n)
+*/
+//红外
+int RECV_PIN = 11;
+IRrecv irrecv(RECV_PIN); //定义接收引脚为11脚.
+decode_results results;    //声明一个IRremote库函数独有的变量类型(decode_resultc)
+
+//按键
+const int buPin1=2;
+int A=0,B=0;              //  A 表示场子状态 有人/空场（1/0),  B表示想要加入的人数
+
+long lastDebounceTime1=0;
+
+long debounceDelay=50;
+
+int buttonState1;
+int lastButtonState1=LOW;
+
+long long int value[10]={16738455,16724175,16718055,16743045,16716015,16726215,16734885,16728765,16730805,16732845};
+
+//  遥控器上各个数字对应的信号--十进制     表示这个场子想要加进来的人数
+
+void setup()
+{
+Serial.begin(9600);
+//红外
+irrecv.enableIRIn(); //启动红外，相当于初始化
+Serial.println("红外 is OK");
+//按键引脚
+pinMode(buPin1,INPUT);
+
+//wifi 初始化
+mySerial.begin(115200); //初始化软串口
+Serial.print("setup begin\r\n");
+
+//以下为ESP8266初始化的代码
+Serial.print("FW Version: ");
+Serial.println(wifi.getVersion().c_str());
+
+if (wifi.setOprToStation()) {
+Serial.print("to station ok\r\n");
+} else {
+Serial.print("to station err\r\n");
+}
+
+//ESP8266接入WIFI
+if (wifi.joinAP(SSID, PASSWORD)) {
+Serial.print("Join AP success\r\n");
+Serial.print("IP: ");
+Serial.println(wifi.getLocalIP().c_str());
+} else {
+Serial.print("Join AP failure\r\n");
+}
+
+mySerial.println("AT+UART_CUR=9600,8,1,0,0");
+mySerial.begin(9600);
+Serial.println("setup end\r\n");
+}
+
+unsigned long net_time1 = millis(); //数据上传服务器时间
+int i=0;
+void loop(){
+
+//读取按键数据 ！
+
+int read1=digitalRead(buPin1);
+if(read1!=lastButtonState1){                    //读取按键数据+除抖
+lastDebounceTime1=millis();
+}
+
+if((millis()-lastDebounceTime1)>debounceDelay){
+if(read1!=buttonState1){
+buttonState1=read1;
+if(buttonState1==HIGH){             //按下一次键就改变球场状态
+A=!A;
+}
+}
+}
+
+//红外数据
+
+if (irrecv.decode(&results)) { //检查是否接收到红外遥控信号
+Serial.println("received");
+for(int i=0;i<10;i++){
+if(results.value==value[i]){
+B=i;
+break;
+}
+}
+irrecv.resume(); //接收下一次指令
+}
+
+if(A==0) B=0;          //场空了，想加的人数当然清零
+
+lastButtonState1 = read1;      //重置前一次的状态  ，才能实现按一次键就改变一次数据
+
+/* //oled屏 显示 ！！（已注释，理由见开头）
+
+u8g.firstPage();
+do {
+setFont_L;
+u8g.setPrintPos(20, 15);
+u8g.print("A:");
+u8g.setPrintPos(40, 15);
+u8g.print(A);
+u8g.setPrintPos(20, 30);
+u8g.print("B:");
+u8g.setPrintPos(40, 30);
+u8g.print(B);
+} while (u8g.nextPage());
+
+*/ //wifi 上传数据 ！！！
+if (net_time1 > millis())
+net_time1 = millis();
+
+if (millis() - net_time1 > INTERVAL_SENSOR) //发送数据时间间隔
+{
+if (wifi.createTCP(HOST_NAME, HOST_PORT)) { //建立TCP连接，如果失败，不能发送该数据
+Serial.print("create tcp ok\r\n");
+char buf[10];
+//拼接发送data字段字符串                                      这么整传到Onenet上的数据也是字符串
+String jsonToSend = "{\"practice1\":";          // 第一个数据流
+dtostrf(A, 1, 2, buf);
+jsonToSend += "\"" + String(buf) + "\"";
+jsonToSend += ",\"practice2\":";               // 第二个数据流，
+dtostrf(B, 1, 2, buf);
+jsonToSend += "\"" + String(buf) + "\"";
+jsonToSend += "}";
+
+//拼接POST请求字符串
+String postString = "POST /devices/";
+postString += DEVICE_ID;
+postString += "/datapoints?type=3 HTTP/1.1";
+postString += "\r\n";
+postString += "api-key:";
+postString += APIKey;
+postString += "\r\n";
+postString += "Host:api.heclouds.com\r\n";
+postString += "Connection:close\r\n";
+postString += "Content-Length:";
+postString += jsonToSend.length();
+postString += "\r\n";
+postString += "\r\n";
+postString += jsonToSend;
+postString += "\r\n";
+postString += "\r\n";
+postString += "\r\n";
+
+const char *postArray = postString.c_str(); //将str转化为char数组
+
+Serial.println(postArray);
+wifi.send((const uint8_t *)postArray, strlen(postArray)); //send发送命令，参数必须是这两种格式，尤其是(const uint8_t*)
+Serial.println("send success");
+if (wifi.releaseTCP()) { //释放TCP连接
+Serial.print("release tcp ok\r\n");
+} else {
+Serial.print("release tcp err\r\n");
+}
+postArray = NULL; //清空数组，等待下次传输数据
+} else {
+Serial.print("create tcp err\r\n");
+}
+
+Serial.println("");
+
+net_time1 = millis();
+}
+
+}
+
+
+
+小程序 --js:               (小程序最主要的部分。本来还有个社区功能, 在开发工具上实现了，但在手机上就出现了bug,显示不了。。。。我们的田技术员还没整明白。。）
+
+
+
+const devicesId = "" // 填写在OneNet上获得的devicesId 形式就是一串数字 例子:9939133
+const api_key = "" // 填写在OneNet上的 api-key
+Page({
+    data: {                          //几个变量 用于接收并转化Onenet上的数据
+        practice2: 0,
+        isShow: false,
+        noShow: true,
+        practice1: 0,
+        yn: 0,
+        num: 0
+    },
+    get: function() {
+        var that = this
+//读取Onenet上的数据
+
+        wx.request({
+            url: "https://api.heclouds.com/devices/" + devicesId + "/datastreams",
+            method: 'GET',
+            header: {
+                "content-type": 'application/x-www-form-urlencoded',
+                "api-key": api_key
+            },
+            success(res) {
+                console.log(res.data)
+                if (res.statusCode === 200) {
+                    that.setData({                               //按数据流顺序读取
+                        practice1: res.data.data[6].current_value,
+                        practice2: res.data.data[7].current_value,
+                    })
+                    var x = that.data.practice1 - 0
+                    if (x == 1) {
+                        that.setData({
+                            isShow: true,
+                            noShow: false
+                        })
+                    } else {
+                        that.setData({
+                            isShow: false,
+                            noshow: true
+                        })
+                    }
+                }
+            },
+            fail: function(res) {
+                wx.showToast({ title: '系统错误' })
+ 
+            },
+            complete: function(res) {
+                wx.hideLoading()
+            },
+        })
+    }
+})
